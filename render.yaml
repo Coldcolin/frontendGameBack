@@ -12,6 +12,8 @@ services:
         value: production
       - key: MONGODB_URI
         sync: false # MongoDB Atlas connection string
+      - key: ADMIN_PASSWORD
+        sync: false # password the host signs in with to set up matches
       - key: WEB_ORIGIN
         sync: false # e.g. https://diffarena.vercel.app (comma-separate several)
       - key: WEB_ORIGIN_PATTERN

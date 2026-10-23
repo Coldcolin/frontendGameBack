@@ -4,6 +4,7 @@ import path from "node:path";
 import request from "supertest";
 
 process.env.STORAGE_DIR = path.join(os.tmpdir(), `diffarena-test-${Date.now()}`);
+process.env.ADMIN_PASSWORD = "test-pw";
 
 const { connectDb, disconnectDb } = await import("./db.js");
 const { createApp } = await import("./app.js");
@@ -16,12 +17,17 @@ const { targetPath } = await import("./services/challenges.js");
 const fsp = await import("node:fs/promises");
 const { MatchModel } = await import("./models.js");
 
+const { issueSession } = await import("./auth.js");
+
 const app = createApp();
+let host = "";
 
 beforeAll(async () => {
   await ensureStorage();
   await connectDb("");
   await seedChallenges();
+  const login = await request(app).post("/api/auth/login").send({ password: "test-pw" });
+  host = `Bearer ${login.body.token}`;
 }, 120_000);
 
 afterAll(async () => {
@@ -36,6 +42,7 @@ async function newMatch(durationSec = 600) {
   const [challenge] = (await request(app).get("/api/challenges")).body;
   const res = await request(app)
     .post("/api/matches")
+    .set("authorization", host)
     .send({ challengeId: challenge.id, durationSec, players: [{ name: "Alex Rivera" }, { name: "Sarah Chen" }] });
   expect(res.status).toBe(201);
   return res.body;
@@ -48,7 +55,7 @@ describe("matches API", () => {
   });
 
   it("validates match input", async () => {
-    const res = await request(app).post("/api/matches").send({ challengeId: "x", durationSec: 600, players: [] });
+    const res = await request(app).post("/api/matches").set("authorization", host).send({ challengeId: "x", durationSec: 600, players: [] });
     expect(res.status).toBe(400);
   });
 
@@ -195,7 +202,7 @@ describe("server-scored snapshots", () => {
 describe("uploads", () => {
   it("stores SVG avatars as PNG", async () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script><rect width="10" height="10"/></svg>`;
-    const res = await request(app).post("/api/uploads/avatar").attach("file", Buffer.from(svg), { filename: "a.svg", contentType: "image/svg+xml" });
+    const res = await request(app).post("/api/uploads/avatar").set("authorization", host).attach("file", Buffer.from(svg), { filename: "a.svg", contentType: "image/svg+xml" });
     expect(res.status).toBe(201);
     expect(res.body.url).toMatch(/\.png$/);
     const file = await request(app).get(res.body.url);
@@ -204,15 +211,50 @@ describe("uploads", () => {
   });
 
   it("answers oversized uploads with 413", async () => {
-    const res = await request(app).post("/api/uploads/avatar").attach("file", Buffer.alloc(6 * 1024 * 1024), { filename: "big.png", contentType: "image/png" });
+    const res = await request(app).post("/api/uploads/avatar").set("authorization", host).attach("file", Buffer.alloc(6 * 1024 * 1024), { filename: "big.png", contentType: "image/png" });
     expect(res.status).toBe(413);
   });
 
   it("rate-limits uploads per IP", async () => {
     let status = 0;
-    for (let i = 0; i < 40 && status !== 429; i++) status = (await request(app).post("/api/uploads/avatar")).status;
+    for (let i = 0; i < 40 && status !== 429; i++) status = (await request(app).post("/api/uploads/avatar").set("authorization", host)).status;
     expect(status).toBe(429);
-    const res = await request(app).post("/api/uploads/avatar");
+    const res = await request(app).post("/api/uploads/avatar").set("authorization", host);
     expect(res.body.error).toMatch(/Too many uploads/);
+  });
+});
+
+describe("host sign-in", () => {
+  const matchBody = async () => ({
+    challengeId: (await request(app).get("/api/challenges")).body[0].id,
+    durationSec: 600,
+    players: [{ name: "Alex Rivera" }, { name: "Sarah Chen" }],
+  });
+
+  it("rejects a wrong password", async () => {
+    const res = await request(app).post("/api/auth/login").send({ password: "nope" });
+    expect(res.status).toBe(401);
+    expect(res.body.token).toBeUndefined();
+  });
+
+  it("requires a valid session to create a match", async () => {
+    const body = await matchBody();
+    expect((await request(app).post("/api/matches").send(body)).status).toBe(401);
+    expect((await request(app).post("/api/matches").set("authorization", "Bearer 9999999999999.forged").send(body)).status).toBe(401);
+    const [exp, mac] = host.slice(7).split(".");
+    expect((await request(app).post("/api/matches").set("authorization", `Bearer ${Number(exp) + 1}.${mac}`).send(body)).status).toBe(401);
+    expect((await request(app).post("/api/matches").set("authorization", host).send(body)).status).toBe(201);
+  });
+
+  it("rejects an expired session", async () => {
+    const { token } = issueSession(Date.now() - 13 * 60 * 60_000);
+    expect((await request(app).get("/api/auth/session").set("authorization", `Bearer ${token}`)).body.valid).toBe(false);
+    expect((await request(app).get("/api/auth/session").set("authorization", host)).body.valid).toBe(true);
+  });
+
+  it("requires a session to upload targets and avatars", async () => {
+    const png = Buffer.alloc(10);
+    expect((await request(app).post("/api/challenges").attach("file", png, { filename: "t.png", contentType: "image/png" })).status).toBe(401);
+    expect((await request(app).post("/api/uploads/avatar").attach("file", png, { filename: "a.png", contentType: "image/png" })).status).toBe(401);
   });
 });

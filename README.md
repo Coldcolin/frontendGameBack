@@ -17,7 +17,7 @@ MongoDB: set `MONGODB_URI` in `.env` (local `mongod` or Atlas). If it's not set,
 
 ## How a match works
 
-1. The host picks two contenders, a target and a length, then launches the match. Until the start, only the admin link can see which target was picked. They get a private link for each player, a spectator link and an admin link.
+1. The host signs in with `ADMIN_PASSWORD` (a 12-hour session; changing the password signs everyone out), then picks two contenders, a target and a length, then launches the match. Until the start, only the admin link can see which target was picked. They get a private link for each player, a spectator link and an admin link.
 2. The host starts the match. Both players see the target at the same moment, and the clock is server-authoritative.
 3. Each player's code renders in a sandboxed iframe (opaque origin, CSP, scripts stripped). The browser diffs every render against the target, so the player sees their own score instantly. Rendered snapshots go to the server, which scores each image itself. That way the **live** score everyone else sees always matches the canvas spectators watch, and browsers never report their own number. Opponents and spectators get scores and snapshots, never source code.
 4. **Submit diff check** (⌘/Ctrl + Enter) sends the code to the backend. The backend re-renders it in headless Chromium with the same reset and Tailwind runtime (plain CSS in `<style>` blocks works the same way), then scores it in two parts:
@@ -38,6 +38,7 @@ The backend runs on **Render** as a Docker service, since the grader needs Chrom
 | Variable | Value |
 | --- | --- |
 | `MONGODB_URI` | Atlas connection string |
+| `ADMIN_PASSWORD` | Password the host signs in with to set up matches (pick your own) |
 | `WEB_ORIGIN` | Your Vercel URL, e.g. `https://diffarena.vercel.app` (comma-separate several) |
 | `WEB_ORIGIN_PATTERN` | Optional regex for preview deploys |
 
@@ -50,7 +51,7 @@ Render sets `PORT`. The health check is `/api/health`. Keep the Playwright image
 - **Files are ephemeral.** `storage/` (uploaded targets, avatars, diff and render PNGs) is wiped on every restart and redeploy. Built-in targets re-render at boot, but uploads and results images from earlier matches break.
 - **Idle instances sleep** after about 15 minutes, and the first request then takes about a minute.
 - **Restarts during a match are handled.** Live matches re-arm their timer at boot, and players' browsers re-send their latest code when the socket reconnects.
-- **Rate limits** are per IP, in memory, over 15 minutes: 30 match creations, 30 uploads and 1500 API calls, plus 20 concurrent sockets. Tune them with the `RATE_LIMIT_*` env vars. `TRUST_PROXY=1` (set in `render.yaml`) makes the limits use the real client IP.
+- **Rate limits** are per IP, in memory, over 15 minutes: 30 match creations, 30 uploads, 10 sign-in attempts and 1500 API calls, plus 20 concurrent sockets. Tune them with the `RATE_LIMIT_*` env vars. `TRUST_PROXY=1` (set in `render.yaml`) makes the limits use the real client IP.
 - **Run one instance only.** Live match state (typed code, live scores, presence) is in memory.
 
 ## Tests

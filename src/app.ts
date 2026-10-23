@@ -7,13 +7,14 @@ import { nanoid } from "nanoid";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config, corsOrigin, storagePaths } from "./config.js";
+import { bearer, checkPassword, issueSession, requireHost, verifySession } from "./auth.js";
 import { ChallengeModel } from "./models.js";
 import { createImageChallenge, toChallengeDTO } from "./services/challenges.js";
 import { normalizeAvatar } from "./grading/renderer.js";
 import {
   createMatch, finalSubmissions, HttpError, loadMatch, startMatch, submit, tokenMatches, toMatchDTO,
 } from "./services/matches.js";
-import type { CreateMatchResponse } from "./contracts.js";
+import type { CreateMatchResponse, LoginResponse } from "./contracts.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -37,6 +38,7 @@ const createMatchBody = z.object({
 });
 
 const submitBody = z.object({ code: z.string().max(100_000) });
+const loginBody = z.object({ password: z.string().max(200) });
 
 const limiter = (limit: number, error: string) =>
   rateLimit({ windowMs: 15 * 60_000, limit, standardHeaders: "draft-8", legacyHeaders: false, message: { error } });
@@ -48,6 +50,7 @@ export function createApp() {
   app.use("/api", limiter(config.rateLimits.api, "Too many requests. Wait a few minutes and try again."));
   const uploadLimit = limiter(config.rateLimits.uploads, "Too many uploads. Wait a few minutes and try again.");
   const matchLimit = limiter(config.rateLimits.matches, "Too many matches created. Wait a few minutes and try again.");
+  const loginLimit = limiter(config.rateLimits.login, "Too many sign-in attempts. Wait a few minutes and try again.");
   app.use(express.json({ limit: "512kb" }));
   app.use(
     "/files",
@@ -67,19 +70,30 @@ export function createApp() {
     res.json({ ok: true });
   });
 
+  app.post("/api/auth/login", loginLimit, (req, res) => {
+    const { password } = loginBody.parse(req.body);
+    if (!checkPassword(password)) throw new HttpError(401, "Wrong password.");
+    const session: LoginResponse = issueSession();
+    res.json(session);
+  });
+
+  app.get("/api/auth/session", (req, res) => {
+    res.json({ valid: verifySession(bearer(req.header("authorization"))) });
+  });
+
   app.get("/api/challenges", async (_req, res) => {
     const list = await ChallengeModel.find({ builtIn: true }).sort({ createdAt: 1 });
     res.json(list.map(toChallengeDTO));
   });
 
-  app.post("/api/challenges", uploadLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/challenges", requireHost, uploadLimit, upload.single("file"), async (req, res) => {
     if (!req.file) throw new HttpError(400, "Upload a PNG, JPG, WebP or SVG under 5 MB.");
     const title = String(req.body.title ?? "").trim() || req.file.originalname.replace(/\.[^.]+$/, "");
     const challenge = await createImageChallenge(title.slice(0, 60), req.file.buffer);
     res.status(201).json(toChallengeDTO(challenge));
   });
 
-  app.post("/api/uploads/avatar", uploadLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/uploads/avatar", requireHost, uploadLimit, upload.single("file"), async (req, res) => {
     if (!req.file) throw new HttpError(400, "Upload a PNG, JPG, WebP or SVG under 5 MB.");
     // Rasterised so no uploaded SVG (which can carry script) is ever served back.
     const name = `${nanoid(12)}.png`;
@@ -90,7 +104,7 @@ export function createApp() {
     res.status(201).json({ url: `/files/uploads/${name}` });
   });
 
-  app.post("/api/matches", matchLimit, async (req, res) => {
+  app.post("/api/matches", requireHost, matchLimit, async (req, res) => {
     const body = createMatchBody.parse(req.body);
     const { id, links } = await createMatch(body);
     const match = await loadMatch(id);

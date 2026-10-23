@@ -7,6 +7,8 @@ export const config = {
   port: Number(process.env.PORT ?? 4000),
   mongoUri: process.env.MONGODB_URI ?? "",
   webOrigin: process.env.WEB_ORIGIN ?? "http://localhost:3000",
+  /** Password the host signs in with to set up matches; required in production */
+  adminPassword: process.env.ADMIN_PASSWORD ?? "",
   storageDir: path.resolve(here, "..", process.env.STORAGE_DIR ?? "storage"),
   canvas: { width: 600, height: 400 },
   submitCooldownMs: 5000,
@@ -18,6 +20,7 @@ export const config = {
     matches: Number(process.env.RATE_LIMIT_MATCHES ?? 30),
     uploads: Number(process.env.RATE_LIMIT_UPLOADS ?? 30),
     api: Number(process.env.RATE_LIMIT_API ?? 1500),
+    login: Number(process.env.RATE_LIMIT_LOGIN ?? 10),
   },
   maxRenderPages: Math.max(1, Number(process.env.MAX_RENDER_PAGES ?? 2)),
 };

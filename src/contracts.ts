@@ -65,6 +65,12 @@ export interface CreateMatchResponse {
   links: { a: string; b: string; spectator: string; admin: string };
 }
 
+/** Host sign-in; send the token as `Authorization: Bearer <token>` */
+export interface LoginResponse {
+  token: string;
+  expiresAt: string;
+}
+
 export type Activity = "typing" | "idle";
 
 export interface ServerToClient {

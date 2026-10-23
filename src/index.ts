@@ -7,6 +7,11 @@ import { closeRenderer } from "./grading/renderer.js";
 import { ensureStorage, seedChallenges } from "./services/challenges.js";
 import { resumeLiveMatches } from "./services/matches.js";
 
+if (!config.adminPassword) {
+  if (process.env.NODE_ENV === "production") throw new Error("[auth] ADMIN_PASSWORD is required in production");
+  console.warn("[auth] ADMIN_PASSWORD not set — anyone can set up matches (dev only)");
+}
+
 await ensureStorage();
 await connectDb();
 await seedChallenges();
